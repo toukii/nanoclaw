@@ -318,3 +318,195 @@ Use available_groups.json to find the JID for a group. The folder name should be
     ]
   });
 }
+
+/** OpenAI function-calling format for custom provider path */
+export interface OpenAIToolDef {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: { type: 'object'; properties: Record<string, { type: string; description?: string; enum?: string[] }>; required?: string[] };
+  };
+}
+
+export interface OpenAIToolExecutor {
+  name: string;
+  def: OpenAIToolDef;
+  execute: (args: Record<string, unknown>) => Promise<string>;
+}
+
+export function getIpcToolsForOpenAI(ctx: IpcMcpContext): OpenAIToolExecutor[] {
+  const { chatJid, groupFolder, isMain } = ctx;
+
+  return [
+    {
+      name: 'mcp__nanoclaw__send_message',
+      def: {
+        type: 'function',
+        function: {
+          name: 'mcp__nanoclaw__send_message',
+          description: 'Send a message to the current WhatsApp group. Use this to proactively share information or updates.',
+          parameters: { type: 'object', properties: { text: { type: 'string', description: 'The message text to send' } }, required: ['text'] }
+        }
+      },
+      execute: async (args) => {
+        const data = { type: 'message', chatJid, text: args.text as string, groupFolder, timestamp: new Date().toISOString() };
+        const filename = writeIpcFile(MESSAGES_DIR, data);
+        return `Message queued for delivery (${filename})`;
+      }
+    },
+    {
+      name: 'mcp__nanoclaw__schedule_task',
+      def: {
+        type: 'function',
+        function: {
+          name: 'mcp__nanoclaw__schedule_task',
+          description: `Schedule a recurring or one-time task. CONTEXT MODE: "group" (with chat history) or "isolated" (fresh). SCHEDULE: cron (e.g. "0 9 * * *"), interval (ms), or once (local time no Z).`,
+          parameters: {
+            type: 'object',
+            properties: {
+              prompt: { type: 'string', description: 'What the agent should do when the task runs.' },
+              schedule_type: { type: 'string', enum: ['cron', 'interval', 'once'], description: 'cron | interval | once' },
+              schedule_value: { type: 'string', description: 'cron expr, milliseconds, or ISO timestamp (no Z)' },
+              context_mode: { type: 'string', enum: ['group', 'isolated'], description: 'group or isolated' },
+              target_group: { type: 'string', description: 'Target group folder (main only)' }
+            },
+            required: ['prompt', 'schedule_type', 'schedule_value']
+          }
+        }
+      },
+      execute: async (args) => {
+        const schedule_type = (args.schedule_type as string) || 'cron';
+        const schedule_value = (args.schedule_value as string) || '';
+        if (schedule_type === 'cron') {
+          try {
+            CronExpressionParser.parse(schedule_value);
+          } catch {
+            return `Invalid cron: "${schedule_value}". Use format like "0 9 * * *" or "*/5 * * * *".`;
+          }
+        } else if (schedule_type === 'interval') {
+          const ms = parseInt(schedule_value, 10);
+          if (isNaN(ms) || ms <= 0) return `Invalid interval: "${schedule_value}". Must be positive milliseconds.`;
+        } else if (schedule_type === 'once') {
+          const date = new Date(schedule_value);
+          if (isNaN(date.getTime())) return `Invalid timestamp: "${schedule_value}". Use ISO 8601.`;
+        }
+        const targetGroup = isMain && args.target_group ? (args.target_group as string) : groupFolder;
+        const data = {
+          type: 'schedule_task',
+          prompt: args.prompt as string,
+          schedule_type,
+          schedule_value,
+          context_mode: (args.context_mode as string) || 'group',
+          groupFolder: targetGroup,
+          chatJid,
+          createdBy: groupFolder,
+          timestamp: new Date().toISOString()
+        };
+        const filename = writeIpcFile(TASKS_DIR, data);
+        return `Task scheduled (${filename}): ${schedule_type} - ${schedule_value}`;
+      }
+    },
+    {
+      name: 'mcp__nanoclaw__list_tasks',
+      def: {
+        type: 'function',
+        function: {
+          name: 'mcp__nanoclaw__list_tasks',
+          description: "List all scheduled tasks. From main: all tasks. From other groups: that group's tasks only.",
+          parameters: { type: 'object', properties: {} }
+        }
+      },
+      execute: async () => {
+        const tasksFile = path.join(IPC_DIR, 'current_tasks.json');
+        if (!fs.existsSync(tasksFile)) return 'No scheduled tasks found.';
+        try {
+          const allTasks = JSON.parse(fs.readFileSync(tasksFile, 'utf-8'));
+          const tasks = isMain ? allTasks : allTasks.filter((t: { groupFolder: string }) => t.groupFolder === groupFolder);
+          if (tasks.length === 0) return 'No scheduled tasks found.';
+          return `Scheduled tasks:\n${tasks.map((t: { id: string; prompt: string; schedule_type: string; schedule_value: string; status: string; next_run: string }) =>
+            `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`).join('\n')}`;
+        } catch (err) {
+          return `Error reading tasks: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
+    },
+    {
+      name: 'mcp__nanoclaw__pause_task',
+      def: {
+        type: 'function',
+        function: {
+          name: 'mcp__nanoclaw__pause_task',
+          description: 'Pause a scheduled task. It will not run until resumed.',
+          parameters: { type: 'object', properties: { task_id: { type: 'string', description: 'The task ID to pause' } }, required: ['task_id'] }
+        }
+      },
+      execute: async (args) => {
+        writeIpcFile(TASKS_DIR, { type: 'pause_task', taskId: args.task_id, groupFolder, isMain, timestamp: new Date().toISOString() });
+        return `Task ${args.task_id} pause requested.`;
+      }
+    },
+    {
+      name: 'mcp__nanoclaw__resume_task',
+      def: {
+        type: 'function',
+        function: {
+          name: 'mcp__nanoclaw__resume_task',
+          description: 'Resume a paused task.',
+          parameters: { type: 'object', properties: { task_id: { type: 'string', description: 'The task ID to resume' } }, required: ['task_id'] }
+        }
+      },
+      execute: async (args) => {
+        writeIpcFile(TASKS_DIR, { type: 'resume_task', taskId: args.task_id, groupFolder, isMain, timestamp: new Date().toISOString() });
+        return `Task ${args.task_id} resume requested.`;
+      }
+    },
+    {
+      name: 'mcp__nanoclaw__cancel_task',
+      def: {
+        type: 'function',
+        function: {
+          name: 'mcp__nanoclaw__cancel_task',
+          description: 'Cancel and delete a scheduled task.',
+          parameters: { type: 'object', properties: { task_id: { type: 'string', description: 'The task ID to cancel' } }, required: ['task_id'] }
+        }
+      },
+      execute: async (args) => {
+        writeIpcFile(TASKS_DIR, { type: 'cancel_task', taskId: args.task_id, groupFolder, isMain, timestamp: new Date().toISOString() });
+        return `Task ${args.task_id} cancellation requested.`;
+      }
+    },
+    {
+      name: 'mcp__nanoclaw__register_group',
+      def: {
+        type: 'function',
+        function: {
+          name: 'mcp__nanoclaw__register_group',
+          description: 'Register a new WhatsApp group (main only). Use available_groups.json for JID. Folder: lowercase with hyphens.',
+          parameters: {
+            type: 'object',
+            properties: {
+              jid: { type: 'string', description: 'WhatsApp JID (e.g. 120363336345536173@g.us)' },
+              name: { type: 'string', description: 'Display name' },
+              folder: { type: 'string', description: 'Folder name (e.g. family-chat)' },
+              trigger: { type: 'string', description: 'Trigger word (e.g. @Andy)' }
+            },
+            required: ['jid', 'name', 'folder', 'trigger']
+          }
+        }
+      },
+      execute: async (args) => {
+        if (!isMain) return 'Only the main group can register new groups.';
+        writeIpcFile(TASKS_DIR, {
+          type: 'register_group',
+          jid: args.jid,
+          name: args.name,
+          folder: args.folder,
+          trigger: args.trigger,
+          timestamp: new Date().toISOString()
+        });
+        return `Group "${args.name}" registered. It will start receiving messages immediately.`;
+      }
+    }
+  ];
+}

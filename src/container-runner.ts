@@ -132,9 +132,19 @@ function buildVolumeMounts(
   const envDir = path.join(DATA_DIR, 'env');
   fs.mkdirSync(envDir, { recursive: true });
   const envFile = path.join(projectRoot, '.env');
+  const customProviderConfigPath = path.join(envDir, 'custom-provider.json');
+  let mountEnvDir = fs.existsSync(customProviderConfigPath);
+
   if (fs.existsSync(envFile)) {
     const envContent = fs.readFileSync(envFile, 'utf-8');
-    const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+    const allowedVars = [
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_API_KEY',
+      'CUSTOM_PROVIDER_BASE_URL',
+      'CUSTOM_PROVIDER_API_KEY',
+      'CUSTOM_PROVIDER_MODEL',
+      'CUSTOM_PROVIDER_CONFIG',
+    ];
     const filteredLines = envContent.split('\n').filter((line) => {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) return false;
@@ -146,12 +156,16 @@ function buildVolumeMounts(
         path.join(envDir, 'env'),
         filteredLines.join('\n') + '\n',
       );
-      mounts.push({
-        hostPath: envDir,
-        containerPath: '/workspace/env-dir',
-        readonly: true,
-      });
+      mountEnvDir = true;
     }
+  }
+
+  if (mountEnvDir) {
+    mounts.push({
+      hostPath: envDir,
+      containerPath: '/workspace/env-dir',
+      readonly: true,
+    });
   }
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)

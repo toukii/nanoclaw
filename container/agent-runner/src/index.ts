@@ -242,6 +242,42 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Custom provider path: env vars OR config file (data/env/custom-provider.json) with baseURL + apiKey
+  const baseUrl = process.env.CUSTOM_PROVIDER_BASE_URL;
+  const apiKey = process.env.CUSTOM_PROVIDER_API_KEY;
+  let useCustomProvider = !!(baseUrl && apiKey);
+  if (!useCustomProvider) {
+    const configPath = process.env.CUSTOM_PROVIDER_CONFIG || '/workspace/env-dir/custom-provider.json';
+    if (fs.existsSync(configPath)) {
+      try {
+        const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as { baseURL?: string; apiKey?: string };
+        useCustomProvider = !!(cfg.baseURL && cfg.apiKey);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  if (useCustomProvider) {
+    if (baseUrl) log(`Using custom provider: baseURL=${baseUrl.replace(/\/$/, '')}`);
+    else log('Using custom provider (from data/env/custom-provider.json)');
+    try {
+      const { runCustomProvider } = await import('./custom-provider.js');
+      await runCustomProvider(input, writeOutput, log);
+      return;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      log(`Custom provider error: ${errorMessage}`);
+      writeOutput({
+        status: 'error',
+        result: null,
+        newSessionId: undefined,
+        error: errorMessage
+      });
+      process.exit(1);
+    }
+  }
+
+  log('Using Claude Agent SDK (Anthropic)');
   const ipcMcp = createIpcMcp({
     chatJid: input.chatJid,
     groupFolder: input.groupFolder,

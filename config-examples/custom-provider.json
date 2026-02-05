@@ -1,0 +1,5 @@
+{
+  "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "apiKey": "sk-your-api-key",
+  "model": "qwen-turbo"
+}

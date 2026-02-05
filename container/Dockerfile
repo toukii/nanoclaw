@@ -38,8 +38,8 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY agent-runner/package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies (--legacy-peer-deps: openai wants zod@3, project uses zod@4)
+RUN npm install --legacy-peer-deps
 
 # Copy source code
 COPY agent-runner/ ./
@@ -52,7 +52,19 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/
 
 # Create entrypoint script
 # Sources env from mounted /workspace/env-dir/env if it exists (workaround for Apple Container -i bug)
-RUN printf '#!/bin/bash\nset -e\n[ -f /workspace/env-dir/env ] && export $(cat /workspace/env-dir/env | xargs)\ncat > /tmp/input.json\nnode /app/dist/index.js < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+# Use line-by-line export so values with = or spaces (e.g. API keys, URLs) are preserved
+RUN printf '%s\n' \
+  '#!/bin/bash' \
+  'set -e' \
+  'if [ -f /workspace/env-dir/env ]; then' \
+  '  while IFS= read -r line || [ -n "$line" ]; do' \
+  '    [[ "$line" =~ ^#.*$ ]] && continue' \
+  '    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && export "$line"' \
+  '  done < /workspace/env-dir/env' \
+  'fi' \
+  'cat > /tmp/input.json' \
+  'node /app/dist/index.js < /tmp/input.json' \
+  > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace
