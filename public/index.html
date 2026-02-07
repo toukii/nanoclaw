@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NanoClaw</title>
+    <style>
+      :root {
+        --bg: #0f0f12;
+        --surface: #18181c;
+        --border: #2a2a30;
+        --text: #e4e4e7;
+        --muted: #71717a;
+        --accent: #a78bfa;
+        --accent-hover: #c4b5fd;
+        --error: #f87171;
+      }
+      * { box-sizing: border-box; }
+      body {
+        font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 1.5rem;
+      }
+      h1 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        margin: 0 0 1.5rem;
+        color: var(--accent);
+      }
+      .wrap {
+        width: 100%;
+        max-width: 42rem;
+      }
+      textarea {
+        width: 100%;
+        min-height: 120px;
+        padding: 0.75rem 1rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font: inherit;
+        font-size: 0.9rem;
+        resize: vertical;
+      }
+      textarea::placeholder { color: var(--muted); }
+      textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .actions {
+        margin-top: 0.75rem;
+        display: flex;
+        gap: 0.5rem;
+      }
+      button {
+        padding: 0.5rem 1.25rem;
+        background: var(--accent);
+        color: var(--bg);
+        border: none;
+        border-radius: 6px;
+        font: inherit;
+        font-size: 0.875rem;
+        cursor: pointer;
+      }
+      button:hover { background: var(--accent-hover); }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .out {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        min-height: 80px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 0.875rem;
+        line-height: 1.5;
+      }
+      .out.loading { color: var(--muted); }
+      .out.error { color: var(--error); }
+      .out:empty::before { content: "回复将显示在这里"; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>NanoClaw</h1>
+      <textarea id="prompt" placeholder="输入问题后点击发送…" autofocus></textarea>
+      <div class="actions">
+        <button id="send">发送</button>
+      </div>
+      <div id="out" class="out"></div>
+    </div>
+    <script>
+      const promptEl = document.getElementById("prompt");
+      const sendBtn = document.getElementById("send");
+      const outEl = document.getElementById("out");
+
+      function setLoading(loading) {
+        sendBtn.disabled = loading;
+        outEl.classList.toggle("loading", loading);
+        if (loading) outEl.textContent = "正在请求 Agent…";
+      }
+
+      function showResult(text, isError) {
+        outEl.classList.remove("loading");
+        outEl.classList.toggle("error", !!isError);
+        outEl.textContent = text || "";
+      }
+
+      async function submit() {
+        const prompt = promptEl.value.trim();
+        if (!prompt) return;
+        setLoading(true);
+        try {
+          const res = await fetch("/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.status === "success") {
+            showResult(data.result ?? "", false);
+          } else {
+            showResult(data.error || "请求失败", true);
+          }
+        } catch (err) {
+          showResult(err.message || "网络错误", true);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      sendBtn.addEventListener("click", submit);
+      promptEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          submit();
+        }
+      });
+    </script>
+  </body>
+</html>
